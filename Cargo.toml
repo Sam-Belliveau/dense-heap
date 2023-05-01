@@ -1,0 +1,17 @@
+[package]
+name = "dense-heap"
+version = "0.1.0"
+authors = ["Sam Belliveau"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+keywords = ["memory", "dheap", "dbox", "dense", "heap"]
+categories = ["memory-management"]
+
+description = """
+
+This code defines a custom allocator called `DHeap` (Dense Heap) and a smart pointer called `DBox` (Dense Box). The `DHeap` is responsible for managing memory allocation, while the `DBox` provides a way to access and manage the data stored in the `DHeap`.
+
+The main advantage of using this custom allocator is that it minimizes memory fragmentation by densely packing the allocated memory. The code also includes test cases to demonstrate the functionality of `DHeap` and `DBox`.
+"""
+
+[dependencies]
