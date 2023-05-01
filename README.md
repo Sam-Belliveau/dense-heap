@@ -8,6 +8,10 @@ This project provides a custom memory allocator called `DHeap` and a smart point
 - Minimizes memory usage for uniformly sized allocations
 - Smart pointer `DBox` for easy memory management
 
+## Documentation
+
+Documentation can be found [here](https://docs.rs/dense-heap/latest/dense_heap/dheap/index.html).
+
 ## Usage
 
 To use this custom allocator, first, create a `DHeap` instance with the desired capacity:
