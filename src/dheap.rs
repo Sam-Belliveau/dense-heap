@@ -28,11 +28,8 @@ use std::{
     ops::{Deref, DerefMut, Drop},
 };
 
-/// The DHeapNode contains all the metadata required to keep the
-/// DHeap organized. It has 24 bytes of overhead, however, it is
-/// constructed in a way that the DBox type only needs to store
-/// a reference to it's DHeapNode in order to function.
-enum DHeapNode<'a, T: Sized> {
+/// The DHeapNode contains all the metadata required to keep the DHeap organized.
+enum DHeapNode<T: Sized> {
     /// Edge is always the last element of the vector. When the
     /// head points to the edge, new memory must be allocated.
     Edge(),
@@ -41,28 +38,19 @@ enum DHeapNode<'a, T: Sized> {
     /// been freed. It points to the previous head when
     /// it was freed, creating a chain of free blocks for
     /// future allocations.
-    Empty { next: usize },
+    Empty(usize),
 
     /// Holding represents a memory slot in use by a DBox<_>.
     /// The memory is owned by the DBox<_> pointing to it,
     /// which is why it is wrapped in a ManuallyDrop<_>. The DBox<_>
     /// is guaranteed to drop before the DHeap<_>.
-    Holding {
-        // We store this data inside the DHeapNode<_> in order
-        // to keep the size of the DBox<_> small.
-        heap: &'a DHeap<'a, T>,
-        index: usize,
-        value: ManuallyDrop<T>,
-    },
+    Holding(ManuallyDrop<T>),
 
     /// When calling DBox.into_inner(), memory is moved out of the
     /// DHeap<_> before the DBox<_> has dropped. This serves as an indicator
     /// for the DBox<_> not to panic when it finds its memory moved during
     /// the dropping process.
-    Moved {
-        heap: &'a DHeap<'a, T>,
-        index: usize,
-    },
+    Moved(),
 }
 
 use DHeapNode::*;
@@ -72,12 +60,12 @@ use DHeapNode::*;
 /// The heap has an overhead of 24 bytes per element, and it will never use more memory than what is allocated
 /// at any given point in time, no matter which elements are freed and in which order. The linking nature of the
 /// indices will always backfill optimally, ensuring that the memory usage is as efficient as possible.
-pub struct DHeap<'a, T: Sized> {
-    buffer: UnsafeCell<Vec<DHeapNode<'a, T>>>,
+pub struct DHeap<T: Sized> {
+    buffer: UnsafeCell<Vec<DHeapNode<T>>>,
     head: Cell<usize>,
 }
 
-impl<'a, T> DHeap<'a, T> {
+impl<T> DHeap<T> {
     /// Creates a new `DHeap` with a specified initial capacity.
     ///
     /// Allocates a buffer with the requested capacity, plus one additional element to account for the `Edge`.
@@ -105,7 +93,7 @@ impl<'a, T> DHeap<'a, T> {
     }
 
     // internally used to make life easy
-    fn memory(&self) -> &'a mut Vec<DHeapNode<T>> {
+    fn memory(&self) -> &mut Vec<DHeapNode<T>> {
         unsafe { &mut *self.buffer.get() }
     }
 
@@ -124,7 +112,7 @@ impl<'a, T> DHeap<'a, T> {
     ///
     /// Users must ensure that no references to elements within the dense heap are held when calling this function.
     /// If references are held, they may become invalid after the function call.
-    pub unsafe fn unsafe_new(&'a self, v: T) -> DBox<T> {
+    pub unsafe fn unsafe_new(&self, v: T) -> DBox<T> {
         let index = self.head.get();
 
         match self.memory()[index] {
@@ -138,18 +126,15 @@ impl<'a, T> DHeap<'a, T> {
                 self.memory().push(Edge());
             }
 
-            Empty { next } => self.head.set(next),
+            Empty(next) => self.head.set(next),
             _ => panic!("invalid head pointer! [corrupted memory]"),
         }
 
-        self.memory()[index] = Holding {
-            heap: self,
-            index,
-            value: ManuallyDrop::new(v),
-        };
+        self.memory()[index] = Holding(ManuallyDrop::new(v));
 
         DBox {
-            data: &mut self.memory()[index],
+            heap: self,
+            index,
             _marker: PhantomData,
         }
     }
@@ -166,7 +151,7 @@ impl<'a, T> DHeap<'a, T> {
     ///
     /// - `Ok(DBox<T>)` if the allocation was successful.
     /// - `Err(&'static str)` if there is no available capacity within the reserved memory.
-    pub fn safe_new(&'a self, v: T) -> Result<DBox<T>, &'static str> {
+    pub fn safe_new(&self, v: T) -> Result<DBox<T>, &'static str> {
         if self.memory().len() == self.memory().capacity() {
             Err("out of reserved memory!")
         } else {
@@ -183,7 +168,7 @@ impl<'a, T> DHeap<'a, T> {
     /// # Returns
     ///
     /// - A `usize` representing the memory usage of the `DHeap`.
-    pub fn size(&'a self) -> usize {
+    pub fn size(&self) -> usize {
         self.memory().len()
     }
 }
@@ -191,15 +176,22 @@ impl<'a, T> DHeap<'a, T> {
 /// DBox is a smart pointer designed to work with the DHeap allocator.
 ///
 /// It provides similar functionality to Box in the Rust standard library but is specifically tailored
-/// for use with the dense heap implementation (DHeap). The DBox manages the memory of its inner
-/// value T by maintaining a mutable reference to the DHeapNode in the DHeap that stores the value.
-/// When the DBox goes out of scope, it deallocates the memory held in the DHeap.
+/// for use with the dense heap implementation (DHeap).
 pub struct DBox<'a, T> {
-    data: &'a mut DHeapNode<'a, T>,
+    heap: &'a DHeap<T>,
+    index: usize,
     _marker: PhantomData<T>,
 }
 
 impl<'a, T> DBox<'a, T> {
+    fn data(&self) -> &'a DHeapNode<T> {
+        &self.heap.memory()[self.index]
+    }
+
+    fn mut_data(&mut self) -> &'a mut DHeapNode<T> {
+        &mut self.heap.memory()[self.index]
+    }
+
     /// Consumes the `DBox` and retrieves the inner value `T`.
     ///
     /// This function replaces the `DBox`'s memory cell with a `Moved` state, indicating
@@ -209,22 +201,9 @@ impl<'a, T> DBox<'a, T> {
     /// # Returns
     ///
     /// - The inner value `T` contained within the `DBox`.
-    pub fn into_inner(self) -> T {
-        // This nested matching is incredibly weird, however it is required to extract
-        // ownership of the value while correctly maintaining the dheap.
-        match &self.data {
-            Holding { heap, index, .. } => {
-                match replace(
-                    self.data,
-                    Moved {
-                        heap,
-                        index: *index,
-                    },
-                ) {
-                    Holding { value, .. } => ManuallyDrop::into_inner(value),
-                    _ => panic!("invalid state! [corrupted memory]"),
-                }
-            }
+    pub fn into_inner(mut self) -> T {
+        match replace(self.mut_data(), Moved()) {
+            Holding(value) => ManuallyDrop::into_inner(value),
             _ => panic!("use after free! [corrupted memory]"),
         }
     }
@@ -232,21 +211,16 @@ impl<'a, T> DBox<'a, T> {
 
 impl<'a, T> Drop for DBox<'a, T> {
     fn drop(&mut self) {
-        match self.data {
-            Holding { heap, index, value } => {
+        match self.mut_data() {
+            Holding(value) => {
                 // SAFETY: The memory cell is immediately replaced with an empty cell after dropping.
                 unsafe { ManuallyDrop::drop(value) }
-                *self.data = Empty {
-                    next: heap.head.replace(*index),
-                };
             }
-            Moved { heap, index } => {
-                *self.data = Empty {
-                    next: heap.head.replace(*index),
-                };
-            }
+            Moved() => {}
             _ => panic!("double free! [corrupted memory]"),
         }
+
+        *self.mut_data() = Empty(self.heap.head.replace(self.index));
     }
 }
 
@@ -254,7 +228,7 @@ impl<'a, T> Deref for DBox<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        if let Holding { value, .. } = &*self.data {
+        if let Holding(value) = self.data() {
             value.deref()
         } else {
             // SAFETY:
@@ -268,7 +242,7 @@ impl<'a, T> Deref for DBox<'a, T> {
 
 impl<'a, T> DerefMut for DBox<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        if let Holding { value, .. } = &mut *self.data {
+        if let Holding(value) = self.mut_data() {
             value.deref_mut()
         } else {
             // SAFETY:

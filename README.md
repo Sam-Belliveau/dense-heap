@@ -44,4 +44,4 @@ A basic example of using the DHeap allocator and DBox smart pointer can be found
 
 ## Safety
 
-The code uses unsafe Rust features to optimize performance, but these are limited and accompanied by explanations. The use of `DBox` ensures that the memory management is safe and prevents issues like double frees or use-after-free. However, be cautious when using the `unsafe_new` method, as it may invalidate existing references if the underlying vector needs to be resized.
+The code uses unsafe Rust features to optimize performance, but these are limited and accompanied by explanations. The use of `DBox` ensures that the memory management is safe and prevents issues like double frees or use-after-free. However, be cautious when using the `unsafe_new` method, as it may invalidate existing references if the underlying vector needs to be resized. DBox's will always remain valid after a resize, however references to the values in those boxes will not.
